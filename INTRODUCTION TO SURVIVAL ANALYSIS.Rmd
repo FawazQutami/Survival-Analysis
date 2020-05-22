@@ -1,0 +1,602 @@
+---
+author: "Fawaz Qutami"
+title: "Survival Analysis Using R - PBC data-set"
+output: html_document
+---
+
+
+# Load required libraries:
+```{r}
+library(survival)
+library(ranger)
+library(dplyr)
+library(survminer)
+library(psych)
+library(gmodels)
+library(survivalROC)
+library(tidyverse)
+library(glmnet)
+library(ggplot2)
+
+data(pbc)
+
+```
+
+# Data-set Prepossessing:
+```{r}
+# Show information of the status table: 0 = censored, 1 = transplant, 2 = died
+table(pbc$status)
+
+# Remove transplants cases and transform the status variable to a logical (True, False):
+#PbcData <- within(pbc, {status <- ifelse(status != 1, status, NA)})
+PbcData <- subset(pbc, status != 1)
+PbcData <- transform(PbcData, status = as.logical(status))
+
+
+# Factor the sex variable to “Male” and “Female” instead of “m” and “f”:
+PbcData$sex <- factor(PbcData$sex
+                  , levels = c("m","f")
+                  , labels = c("Male", "Female"))
+# Factor the trt variable to “D-penicillmain” and “placebo” instead of 1 and 2:
+PbcData$trt <- factor(PbcData$trt #, exclude = NULL
+                  , levels = c(1, 2)#, NA)
+                  , labels = c("D-penicillmain", "placebo"))#, "NotTreated"))
+# Factor the edema variable to "No Edema", "Treated-Untreated", "Edema - diuretic therapy" instead of 0,0.5, 1:
+PbcData$edema <- factor(PbcData$edema
+                    , levels = c(0,0.5, 1)
+                    , labels = c("No Edema", "Treated Successfully/Untreated", "Edema"))
+
+# Add time time and months
+
+PbcData <- mutate(PbcData, time = (PbcData$time / 365.25))
+
+# Remove missing data:
+#PbcData <- PbcData[complete.cases(PbcData), ]
+
+PbcData
+
+```
+
+# Basic Descriptive Statistics:
+
+## How would you view the descriptive statistics for all variables?
+```{r}
+# View the 
+describe(PbcData$time)
+summary(PbcData$age)
+```
+
+## What is the distribution shape of “time” in time?
+```{r}
+# Plot the time distribution
+hist(PbcData$time ,las = 1, col = c("bisque1", " bisque2", "bisque3", "bisque4")
+        ,main = "Histogram of Time", xlab = "Time in Years")
+```
+## Calculate the relative frequency for status and sex 
+```{r}
+relative_frequency = round(100 * prop.table(table(PbcData$status, PbcData$sex), 2), 1)
+relative_frequency
+```
+
+## How would you calculate the frequency table of sex co-variate?
+```{r}
+# Discrete variables.
+frequency <- table(PbcData$sex)
+sample_size <- length(PbcData$sex)
+relative_frequency <- round(frequency/sample_size
+                            , digits=2)
+
+cumulative_frequency <- cumsum(frequency)
+cumulative_relative_frequency <- round(cumsum(relative_frequency)
+                                       , digits=2)
+table_sex <- cbind(frequency
+                   , relative_frequency
+                   , cumulative_frequency
+                   , cumulative_relative_frequency)
+colnames(table_sex) <- c("Frequency"
+                         , "Relative Frequency"
+                         , "Cum. Frequency"
+                         , "Cum. Relative Frequency")
+paste("Sex = Gender of patients")
+table_sex
+
+```
+
+## What is the death rate in males and females?
+```{r}
+# Crosstab of sex vs Event
+#CrossTable(drow, column). From package (gmodels)
+CrossTable(PbcData$sex 
+           , PbcData$status
+           , digits=2
+           , prop.c=FALSE
+           , prop.t=FALSE
+           , prop.chisq=FALSE
+           , expected=FALSE
+           , dnn=c("Male/Female", "Status (Event)"))
+```
+
+# Kaplan–Meier Estimator (KM):
+## Censored data plot 
+```{r}
+patients <- 50
+plot(c(0, PbcData$time[1]), c(1, 1), type = "l"
+     , ylim = c(0, patients + 5)
+     , xlim = c(0, max(PbcData$time[1:patients]) + 3)
+     , ylab = "Patients", xlab = "Survival time in time"
+     , main ="Censored Survival Data")
+for (i in 2:patients) lines(c(0, PbcData$time[i]), c(i, i))
+for (i in 1:patients) 
+    {
+        if (PbcData$status[i] == 0) 
+            points(PbcData$time[i], i, col = "red", pch = 10)  # Censored
+        if (PbcData$status[i] == 1) 
+            points(PbcData$time[i], i, col = "gray", pch = 10) # Event
+    }
+legend("topright"
+       , c("Censored", "Event")
+       , pch = 10
+       , col = c("red", "gray")
+       , bty = "n")
+
+```
+
+
+## What is Kaplan-Meier median survival time overall the data?
+```{r}
+# Create a survival object:
+Surv_OBJ <- Surv(PbcData$time, PbcData$status) # by default right censored
+
+# Fitting the survival model - 1 is to estimate based on overall the PbcData:
+KM_Model <- survfit(Surv_OBJ ~ 1, data = PbcData, conf.type="log-log", type = "kaplan-meier")
+
+# Show the KM information
+KM_Model
+
+# Plot the Estimators:
+ggsurvplot(KM_Model
+           ,data = PbcData
+           #,pval = TRUE            
+           #,conf.int = TRUE         
+           #,conf.int.style = "step" # "ribbon"
+           ,xlab = "Time in years" 
+           #,tables.theme = theme_cleantable()
+           ,surv.median.line = "hv"  
+           #,risk.table = TRUE
+           ,title="Kaplan-Meier Estimator" 
+           #,risk.table.height=.25
+           #,legend.title="KM"
+           ,palette = "#2E9FDF"
+           ,ggtheme = theme_bw()
+           #,censor = FALSE
+           
+           ) 
+```
+
+## What is Kaplan-Meier survival probability over all the data?
+```{r}
+summary(KM_Model)
+```
+
+## What is the probability of surviving for 1, 3 and 5 years?
+```{r}
+summary(KM_Model,  times = c(1, 3, 5))
+```
+## What is KM median survival time by treatment predictor?
+```{r}
+KM_trt <- survfit(Surv_OBJ ~ trt, data = PbcData)
+KM_trt
+
+ggsurvplot(KM_trt
+           ,data = PbcData
+           ,conf.int = TRUE         
+           ,xlab = "Time in years" 
+           ,surv.median.line = "hv"  
+           ,title="Kaplan-Meier by Treatment predictor" 
+           ,legend.title="Treatment"
+           ,palette = c("#E7B800", "#2E9FDF")
+           ,ggtheme = theme_bw()
+           ,censor = FALSE
+           ,legend.labs = c("D-penicillmain", "placebo")
+           
+           )
+```
+
+# Log-Rank Test:
+## Is there a difference in survival rates between males and females?
+```{r Fig0, echo=TRUE, fig.height=6, fig.width=8}
+
+pbc_sex = PbcData[complete.cases(PbcData$sex), ]
+
+Surv_sex <- Surv(pbc_sex$time, pbc_sex$status)
+logrank_Model_sex <- survdiff(Surv_OBJ ~ sex, data = pbc_sex)
+
+logrank_Model_sex
+
+# Plot using KM and ggsurvplot
+KMLR_sex <- survfit(Surv_OBJ ~ sex, data = pbc_sex, conf.type="log-log")
+ggsurvplot(KMLR_sex
+           ,data = pbc_sex
+           ,pval = TRUE
+           ,conf.int = TRUE         
+           #,conf.int.style = "step" # "ribbon"
+           ,xlab = "Time in years" 
+           #,tables.theme = theme_cleantable()
+           ,surv.median.line = "hv"  
+           ,risk.table = TRUE
+           ,title="Kaplan-Meier by Sex predictor" 
+           ,risk.table.height=.25
+           ,tables.col = "strata"
+           ,tables.y.text = FALSE
+           ,legend.title="Sex"
+           ,palette = c("#2E9FDF", "#DE9FDF")
+           ,ggtheme = theme_bw() # theme_light()
+           ,censor = FALSE
+           ,legend.labs = c("Male", "Female")
+           )
+
+
+```
+
+## Is there a difference in survival rates between D-penicillmain and placebo?
+```{r Fig1, echo=TRUE, fig.height=6, fig.width=8}
+
+pbc_trt = PbcData[complete.cases(PbcData$trt), ]
+
+Surv_trt <- Surv(pbc_trt$time, pbc_trt$status)
+logrank_Model_trt <- survdiff(Surv_trt ~ trt, data = pbc_trt)
+
+logrank_Model_trt
+
+# Plot using KM and ggsurvplot
+KMLR_trt <- survfit(Surv_trt ~ trt, data = pbc_trt, conf.type="log-log")
+ggsurvplot(KMLR_trt
+           ,data = pbc_trt
+           ,pval = TRUE
+           ,conf.int = TRUE         
+           #,conf.int.style = "step" # "ribbon"
+           ,xlab = "Time in years" 
+           #,tables.theme = theme_cleantable()
+           ,surv.median.line = "hv"  
+           ,risk.table = TRUE
+           ,title="Kaplan-Meier by Treatment predictor" 
+           ,risk.table.height=.25
+           ,tables.col = "strata"
+           ,tables.y.text = FALSE
+           ,legend.title="Treatment"
+           ,palette = c("#E7B800", "#2E9FDF")
+           ,ggtheme = theme_bw() # theme_light()
+           ,censor = FALSE
+           ,legend.labs = c("D-penicillmain", "placebo")
+           
+           )
+
+
+```
+
+## What is the probability of surviving over edema predictor groups?
+```{r Fig3, echo=TRUE, fig.height=6, fig.width=8}
+pbc_edema = PbcData[complete.cases(PbcData$edema), ]
+
+Surv_edema <- Surv(pbc_edema$time, pbc_edema$status)
+logrank_Model_edema <- survdiff(Surv_edema ~ edema, data = pbc_edema)
+
+logrank_Model_edema
+
+# Plot using KM and ggsurvplot 
+KMLR_edema <- survfit(Surv_edema ~ edema, data = pbc_edema, conf.type="log-log")
+ggsurvplot(KMLR_edema
+           ,data = pbc_edema
+           ,pval = TRUE
+           ,conf.int = TRUE         
+           ,xlab = "Time in years" 
+           ,surv.median.line = "hv"  
+           ,risk.table = TRUE
+           ,title="Kaplan-Meier by Edema predictor" 
+           ,risk.table.height=.25
+           ,tables.col = "strata"
+           ,tables.y.text = FALSE
+           ,legend.title=""
+           ,palette = c("#E7B800", "#2E9FDF", "#DE9FDF")
+           ,ggtheme = theme_bw() # theme_light()
+           ,censor = FALSE
+           ,legend.labs = c("No Edema", "Treated Successfully/Untreated", "Edema")
+           
+           )
+
+```
+
+# Cox Proportional Hazard Model
+## What would you interpret a multivariate cox model?
+```{r}
+
+# Remove all missing data:
+Cox_Data = PbcData[complete.cases(PbcData), ]
+# Create Cox survival object:
+Surv_Cox <- Surv(Cox_Data$time, Cox_Data$status)
+# Fit Cox Model
+COX_Model <- coxph(Surv_Cox ~ age 
+                 + sex 
+                 + edema 
+                 + alk.phos
+                 + albumin 
+                 + bili 
+                 + trt
+                 + protime
+                 + stage
+                 , data = Cox_Data)
+
+# Show the Cox details:
+COX_Model
+#summary(COX_fit)
+
+#Plot Cox curve
+ggsurvplot(survfit(COX_Model)
+           ,data=Cox_Data
+           ,xlab = "Time in time"
+           ,title="Cox Proportional Hazard Model - 7 predictors"
+           ,ggtheme = theme_light()
+           ,legend.title="Predictors"
+           ,surv.median.line = "hv"
+           #,censor = FALSE
+           ,palette = "#E7B800")
+
+```
+
+Save the table in a csv file for further modification: 
+```{r}
+broom::tidy(COX_Model)%>%
+    write.csv("Cox_Coefficients.csv")
+```
+
+## What are the top 5 risky cases in the above model? 
+```{r}
+# Let us create a new dataset with the following variables:
+new_COX_data <- PbcData[c("id", "age", "sex", "alk.phos", "edema", "albumin", "bili", "trt", "stage", "protime")]
+
+# Create a segmented dataset: add a new variable called risk_score(calculated by linear prediction)
+segmented <-
+  new_COX_data %>%
+  mutate(risk_score = predict(COX_Model, newdata = new_COX_data, type = "lp"))
+
+# Arrange the data desc. and view the top 5 risks:
+segmented %>%
+  arrange(desc(risk_score)) %>%
+  head(5)
+```
+
+# Model Building 
+## Step wise model selection based on AIC
+```{r}
+# Let us choose COX_Model to automatically check the best model:
+auto_AIC <- step(COX_Model)
+```
+
+# Model diagnostics
+## Schoenfeld Residuals
+```{r Fig4, echo=TRUE, fig.height=7, fig.width=15}
+# The function that calculates the Schoenfeld residuals is cox.zph(). The two primary arguments of this function are the fitted Cox model and the transformation of time to be used. The code below does the calculations for the KM scale.
+SRPH  <- cox.zph(COX_Model, transform = "km")
+SRPH
+
+par(mfrow=c(2,5))
+plot(SRPH
+     , coef(COX_Model)[1]
+     , col = 2:3
+     , lwd = 3)
+
+```
+
+# Penalized Regression - Elastic Net Cox Model:
+## Prepare the data-set for machine learning:
+```{r}
+# Bulid Surv object and call it Y:
+Y <- Surv(Cox_Data$time, Cox_Data$status)
+
+# Create an X matrix from other covariates - as a numeric matrix::
+X <- subset(Cox_Data, select = -c(time, status, id))
+X <- as.matrix(sapply(X, as.numeric))
+
+#  Plot the model:
+ggsurvplot(survfit(Y~1)
+           ,data = Cox_Data
+           ,xlab = "Time in years" 
+           ,surv.median.line = "hv"  
+           ,risk.table = TRUE
+           ,title="Cox Proportional Hazard Model" 
+           ,risk.table.height=.25
+           ,legend.title="Predictors"
+           ,palette = "#2E9050"
+           ,ggtheme = theme_bw()
+           ,censor = FALSE
+           ,tables.col = "strata"
+           ,tables.y.text = FALSE
+           )
+           
+# Plot the means of X :
+hist(colMeans(t(X)), main = "Distribution of Means", xlab = "")
+# Plot the variability of  X:
+hist(apply(t(X),2,sd), main = "Distribution of Variability", xlab = "")
+```
+
+## Prepare train and test sets:
+```{r}
+## Split X and Y randomly into a train and a test sets:
+dim(X)
+set.seed(1234)
+
+train.idx <- sample(nrow(X), size = 200, replace = FALSE)
+
+X.train <- X[train.idx,, drop = FALSE]
+Y.train <- Y[train.idx,, drop = FALSE]
+
+X.test <- X[-train.idx,, drop = FALSE]
+Y.test <- Y[-train.idx,, drop = FALSE]
+
+# fit a generalized linear model(Cox regression model) via penalized maximum likelihood:
+fit_sets <- glmnet(X.train, Y.train, family = "cox")
+fit_sets
+# Plot the model:
+plot(fit_sets)
+```
+
+## Selecting the optimal penalization parameter via cross validation
+```{r}
+set.seed(1234)
+# Fit: compute k-fold cross-validation for the Cox model:
+cv.fit <- cv.glmnet(X.train, Y.train, family = "cox")
+
+#Once fit, view the optimal λ value and a cross validated error plot to help evaluate our model.
+plot(cv.fit)
+
+# the left vertical line in our plot shows us where the CV-error curve hits its minimum. The right vertical line shows us the most regularized model with CV-error within 1 standard deviation of the minimum. We also extract such optimal λ’s.
+cv.fit$lambda.min
+cv.fit$lambda.1se
+```
+
+## We can check the active covariates in our model and see their coefficients:
+```{r}
+# Estimated coefficients
+coef.min <- coef(cv.fit, s = cv.fit$lambda.min)
+active.min <- which(coef.min != 0)
+index.min <- coef.min[active.min]
+index.min
+coef.min
+```
+
+## Make predictions:
+### Question: how well is the score predicting survival?
+```{r}
+# Similar to other predict methods, this functions predicts fitted values, logits, coefficients and more from a fitted "glmnet" object.
+
+prediction.scores <- predict(cv.fit, newx = X.test, s = "lambda.min")
+#hist(prediction.scores)
+
+# Test the prediction quality via Cox regression: continuous predictor vs a right-censored time-to-failure outcome
+summary(coxph(Y.test ~ prediction.scores))
+
+# the model is good as p is significant and  betas is positive
+
+# Compute the interquartile range (IQR) for prediction.scores:
+prediction.scores.scaled <- prediction.scores / IQR(prediction.scores)
+
+# View the distribution of the output
+#hist(prediction.scores.scaled)
+
+# Test the prediction quality via Cox regression:
+summary(coxph(Y.test ~ prediction.scores.scaled))
+
+Cox_Regression_Model <-coxph(Y.test ~ prediction.scores.scaled)
+
+# the model is better than the pervious one as p is significant and betas is positive
+
+```
+
+## Test for number of risks:
+```{r}
+# Split scores into 2 categories, and compare patients with 'low' vs 'high' score:
+Risk_Factor <- 
+  ifelse(prediction.scores.scaled <= median(prediction.scores.scaled)
+         , "Low Risk"
+         , "High Risk")
+
+table(Risk_Factor)
+```
+
+## What is the median survival time by Risk_Factor?
+```{r}
+KM_Risk <- survfit(Y.test ~ Risk_Factor, conf.type = "log-log")
+KM_Risk
+#  Plot the model:
+ggsurvplot(KM_Risk, data = Y.test, xlab = "Time in years" 
+           ,risk.table = TRUE,title="KM - Risk Factor", risk.table.height=.3
+           ,surv.median.line = "hv", legend.title="", tables.col = "strata"
+           ,tables.y.text = FALSE, legend.labs = c("High Risk", "Low Risk")
+           )
+```
+
+
+Question: What is Kaplan-Meier probability of surviving for 2, 4, and 6 years between "Low Risk" and "High Risk" patients?
+
+```{r}
+summary(KM_Risk, time = c(2, 4, 6))
+```
+
+## # Test the score of the prediction:
+```{r}
+# An ROC curve (receiver operating characteristic curve) is a graph showing the          performance of a classification model at all classification thresholds. This         curve plots two parameters:True Positive Rate and False Positive Rate
+
+cutOff = quantile(prediction.scores.scaled, prob = 0:10/10)
+
+ROC <- survivalROC(Stime = Y.test[, 1],
+                   status = Y.test[, 2],
+                   marker = prediction.scores.scaled,
+                   cut.values = cutOff,
+                   predict.time = 5,
+                   method = "KM")
+
+# AUC stands for "Area under the ROC Curve." That is, AUC measures the entire two-dimensional area underneath the entire ROC curve (think integral calculus) from (0,0) to (1,1).
+ROC$AUC
+
+# Plot False Positive rate vs True Positive rate
+with(ROC, plot(TP ~ FP, main = "False Positive rate vs True Positive rate"
+               , type = "l"
+               , col = 2
+               , xlim = c(0, 1)
+               , ylim = c(0, 1)
+               ))
+```
+# Random Forest Classification:
+ 
+```{r}
+# Drop rows with NA values from the dataset
+Ranger_Data = PbcData[complete.cases(PbcData), ]
+
+# Fitting the random forest
+Ranger_Model <- ranger(Surv(Ranger_Data$time
+                            , Ranger_Data$status) ~.
+                       ,data = Ranger_Data
+                       , num.trees = 500
+                       , importance = "permutation"
+                       ,seed = 1)
+ 
+# Get the variable importance
+data.frame(sort(Ranger_Model$variable.importance
+                ,decreasing = TRUE))
+
+```
+
+# Plot the death times
+```{r}
+plot(Ranger_Model$unique.death.times
+     , Ranger_Model$survival[1,]
+     , type = "l", ylim = c(0,1)
+     ,)
+```
+
+# Comparing models:
+```{r}
+# Add a row of model name
+km <- rep("Kaplan Meier", length(KM_Model$time))
+cox_surv <- survfit(COX_Model)
+cox <- rep("Cox HP", length(cox_surv$time))
+rf <- rep("Survival Forest",length(Ranger_Model$unique.death.times))
+
+# Create a dataframe
+km_df <- data.frame(KM_Model$time, KM_Model$surv, km)
+cox_df <- data.frame(cox_surv$time, cox_surv$surv, cox)
+rf_df <- data.frame(Ranger_Model$unique.death.times,sapply(data.frame(Ranger_Model$survival),mean),rf)
+
+# Rename the columns so they are same for all dataframes
+names(km_df) <- c("Time","Surv","Model")
+names(cox_df) <- c("Time","Surv","Model")
+names(rf_df) <- c("Time","Surv","Model")
+
+# Combine the results
+plot_combo <- rbind(km_df,cox_df,rf_df)
+ 
+# Make a ggplot
+plot_gg <- ggplot(plot_combo, aes(x = Time, y = Surv, color = Model))
+plot_gg + geom_line() + ggtitle("Comparison of Survival Curves")
+```
+
