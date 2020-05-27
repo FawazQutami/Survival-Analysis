@@ -7,5 +7,4 @@ The basic analysis, that I will do, can be done using PBC dataset and the functi
 
 	
 # Code written in R
-This code favours readability and ease of understanding over speed and robustness and is meant to be used as either a research 
-tool or a study guide for anyone interested in learning about Survival Analysis.
+This code is meant to be used as either a research tool or a study guide for anyone interested in learning about Survival Analysis.
